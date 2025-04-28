@@ -1,10 +1,11 @@
-import type { BoxProps, InputProps } from '@invoke-ai/ui-library';
+import type { BoxProps, InputProps, SystemStyleObject } from '@invoke-ai/ui-library';
 import { Flex, Input, Text } from '@invoke-ai/ui-library';
 import { IAINoContentFallback } from 'common/components/IAIImageFallback';
 import ScrollableContent from 'common/components/OverlayScrollbars/ScrollableContent';
 import { useStateImperative } from 'common/hooks/useStateImperative';
 import { fixedForwardRef } from 'common/util/fixedForwardRef';
 import { typedMemo } from 'common/util/typedMemo';
+import { isEqual } from 'lodash-es';
 import type { ChangeEvent, PropsWithChildren } from 'react';
 import type React from 'react';
 import {
@@ -20,15 +21,53 @@ import {
 import { useTranslation } from 'react-i18next';
 import { assert } from 'tsafe';
 
-/* eslint-disable-next-line @typescript-eslint/no-explicit-any */
-export type Group<T extends object, U = any> = {
+const uniqueGroupKey = Symbol('uniqueGroupKey');
+
+export type Group<T extends object> = {
+  /**
+   * The unique id of the group.
+   */
   id: string;
-  data: U;
+  /**
+   * The options in the group.
+   */
   options: T[];
+  /**
+   * The color of the group. Used to style the group toggle button and vertical group line.
+   *
+   * It can be a CSS color string or theme color token.
+   */
+  color?: string;
+  /**
+   * The name of the group.
+   */
+  name?: string;
+  /**
+   * The short name of the group. Used to display for the group toggle button.
+   */
+  shortName?: string;
+  /**
+   * The description of the group. Used to display in the group toggle button.
+   */
+  description?: string;
+  /**
+   * A function that returns a "count" string for the group. It will be called with the number of matching options in
+   * the group.
+   */
+  getOptionCountString?: (count: number) => string;
+  /**
+   * A unique key used for type-checking the group. Use the `buildGroup` function to create a group, which will set this key.
+   */
+  [uniqueGroupKey]: true;
 };
 
-const isGroup = <T extends object>(option: T | Group<T>): option is Group<T> => {
-  return option ? 'options' in option && Array.isArray(option.options) : false;
+export const buildGroup = <T extends object>(group: Omit<Group<T>, typeof uniqueGroupKey>): Group<T> => ({
+  ...group,
+  [uniqueGroupKey]: true,
+});
+
+const isGroup = <T extends object>(optionOrGroup: T | Group<T>): optionOrGroup is Group<T> => {
+  return uniqueGroupKey in optionOrGroup && optionOrGroup[uniqueGroupKey] === true;
 };
 
 export type ImperativeModelPickerHandle = {
@@ -86,7 +125,7 @@ const NoMatchesFallbackWrapper = typedMemo(({ children }: PropsWithChildren) => 
 });
 NoMatchesFallbackWrapper.displayName = 'NoMatchesFallbackWrapper';
 
-type PickerProps<T extends object, U, C> = {
+type PickerProps<T extends object, C> = {
   /**
    * The options to display in the picker. This can be a flat array of options or an array of groups.
    */
@@ -134,7 +173,7 @@ type PickerProps<T extends object, U, C> = {
   /**
    * A custom group component. If not provided, a default group component will be used.
    */
-  GroupComponent?: React.ComponentType<PropsWithChildren<{ group: Group<T, U> } & BoxProps>>;
+  GroupComponent?: React.ComponentType<PropsWithChildren<{ group: Group<T> } & BoxProps>>;
   /**
    * A fallback component to display when there are no options. If a string is provided, it will be formatted
    * as a text element with appropriate styling. If a React node is provided, it will be rendered as is.
@@ -151,7 +190,7 @@ type PickerProps<T extends object, U, C> = {
   extra: C;
 };
 
-type PickerContextState<T extends object, U, C> = {
+type PickerContextState<T extends object, C> = {
   options: (T | Group<T>)[];
   getOptionId: (option: T) => string;
   isMatch: (option: T, searchTerm: string) => boolean;
@@ -163,13 +202,13 @@ type PickerContextState<T extends object, U, C> = {
   noOptionsFallback?: React.ReactNode;
   noMatchesFallback?: React.ReactNode;
   OptionComponent: React.ComponentType<{ option: T } & BoxProps>;
-  GroupComponent: React.ComponentType<PropsWithChildren<{ group: Group<T, U> } & BoxProps>>;
+  GroupComponent: React.ComponentType<PropsWithChildren<{ group: Group<T> } & BoxProps>>;
   extra: C;
 };
 
 /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
-const PickerContext = createContext<PickerContextState<any, any, any> | null>(null);
-export const usePickerContext = <T extends object, U, C>(): PickerContextState<T, U, C> => {
+const PickerContext = createContext<PickerContextState<any, any> | null>(null);
+export const usePickerContext = <T extends object, C>(): PickerContextState<T, C> => {
   const context = useContext(PickerContext);
   assert(context !== null, 'usePickerContext must be used within a PickerProvider');
   return context;
@@ -246,10 +285,58 @@ const flattenOptions = <T extends object>(options: (T | Group<T>)[]): T[] => {
   return flattened;
 };
 
-export const Picker = typedMemo(<T extends object, U = undefined, C = undefined>(props: PickerProps<T, U, C>) => {
+type GroupStatusMap = Record<string, boolean>;
+
+const useTogglableGroups = <T extends object>(options: (T | Group<T>)[]) => {
+  const groupsWithOptions = useMemo(() => {
+    const ids: string[] = [];
+    for (const optionOrGroup of options) {
+      if (isGroup(optionOrGroup) && !ids.includes(optionOrGroup.id)) {
+        ids.push(optionOrGroup.id);
+      }
+    }
+    return ids;
+  }, [options]);
+
+  const [groupStatusMap, setGroupStatusMap] = useState<GroupStatusMap>({});
+
+  useEffect(() => {
+    if (isEqual(Object.keys(groupStatusMap), groupsWithOptions)) {
+      return;
+    }
+
+    const newMap: GroupStatusMap = {};
+    for (const id of groupsWithOptions) {
+      if (newMap[id] === undefined) {
+        newMap[id] = false;
+      } else if (groupStatusMap[id] !== undefined) {
+        newMap[id] = groupStatusMap[id];
+      }
+    }
+    setGroupStatusMap(newMap);
+  }, [groupsWithOptions, groupStatusMap]);
+
+  const toggleGroup = useCallback(
+    (idToToggle: string) => {
+      setGroupStatusMap((prev) => {
+        const newMap: GroupStatusMap = {};
+        for (const id of groupsWithOptions) {
+          const prevStatus = Boolean(prev[id]);
+          newMap[id] = id === idToToggle ? !prevStatus : prevStatus;
+        }
+        return newMap;
+      });
+    },
+    [groupsWithOptions]
+  );
+
+  return { groupStatusMap, toggleGroup } as const;
+};
+
+export const Picker = typedMemo(<T extends object, C>(props: PickerProps<T, C>) => {
   const {
     getOptionId,
-    options,
+    options: rawOptions,
     handleRef,
     isMatch,
     getIsDisabled,
@@ -264,11 +351,27 @@ export const Picker = typedMemo(<T extends object, U = undefined, C = undefined>
     extra,
   } = props;
   const [activeOptionId, setActiveOptionId, getActiveOptionId] = useStateImperative(() =>
-    getFirstOptionId(options, getOptionId)
+    getFirstOptionId(rawOptions, getOptionId)
   );
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const [filteredOptions, setFilteredOptions] = useState<(T | Group<T, U>)[]>(options);
+  const { groupStatusMap, toggleGroup } = useTogglableGroups(rawOptions);
+  const options = useMemo(() => {
+    const _options: (T | Group<T>)[] = [];
+    // When all groups are disabled, we show all options
+    const areAllGroupsDisabled = Object.values(groupStatusMap).every((status) => status === false);
+    for (const optionOrGroup of rawOptions) {
+      if (isGroup(optionOrGroup)) {
+        if (groupStatusMap[optionOrGroup.id] || areAllGroupsDisabled) {
+          _options.push(optionOrGroup);
+        }
+      } else {
+        _options.push(optionOrGroup);
+      }
+    }
+    return _options;
+  }, [rawOptions, groupStatusMap]);
+  const [filteredOptions, setFilteredOptions] = useState<(T | Group<T>)[]>(options);
   const flattenedOptions = useMemo(() => flattenOptions(options), [options]);
   const flattenedFilteredOptions = useMemo(() => flattenOptions(filteredOptions), [filteredOptions]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -284,7 +387,7 @@ export const Picker = typedMemo(<T extends object, U = undefined, C = undefined>
       setActiveOptionId(getFirstOptionId(options, getOptionId));
     } else {
       const lowercasedSearchTerm = searchTerm.toLowerCase();
-      const filtered: (T | Group<T, U>)[] = [];
+      const filtered: (T | Group<T>)[] = [];
       for (const item of props.options) {
         if (isGroup(item)) {
           const filteredItems = item.options.filter((item) => isMatch(item, lowercasedSearchTerm));
@@ -430,7 +533,7 @@ export const Picker = typedMemo(<T extends object, U = undefined, C = undefined>
         GroupComponent,
         extra,
         setSearchTerm,
-      }) satisfies PickerContextState<T, U, C>,
+      }) satisfies PickerContextState<T, C>,
     [
       options,
       getOptionId,
@@ -495,16 +598,16 @@ const DefaultPickerSearchBarComponent = typedMemo(
 DefaultPickerSearchBarComponent.displayName = 'DefaultPickerSearchBarComponent';
 
 const PickerList = typedMemo(
-  <T extends object, U, C>({
+  <T extends object, C>({
     items,
     activeOptionId,
     selectedItemId,
   }: {
-    items: (T | Group<T, U>)[];
+    items: (T | Group<T>)[];
     activeOptionId: string | undefined;
     selectedItemId: string | undefined;
   }) => {
-    const { getOptionId, getIsDisabled } = usePickerContext<T, U, C>();
+    const { getOptionId, getIsDisabled } = usePickerContext<T, C>();
 
     if (items.length === 0) {
       return (
@@ -552,16 +655,16 @@ const PickerList = typedMemo(
 PickerList.displayName = 'PickerList';
 
 const PickerOptionGroup = typedMemo(
-  <T extends object, U, C>({
+  <T extends object, C>({
     group,
     activeOptionId,
     selectedItemId,
   }: {
-    group: Group<T, U>;
+    group: Group<T>;
     activeOptionId: string | undefined;
     selectedItemId: string | undefined;
   }) => {
-    const { getOptionId, GroupComponent, getIsDisabled } = usePickerContext<T, U, C>();
+    const { getOptionId, GroupComponent, getIsDisabled } = usePickerContext<T, C>();
 
     return (
       <GroupComponent group={group}>
@@ -585,14 +688,14 @@ const PickerOptionGroup = typedMemo(
 PickerOptionGroup.displayName = 'PickerOptionGroup';
 
 const PickerOption = typedMemo(
-  <T extends object, U, C>(props: {
+  <T extends object, C>(props: {
     id: string;
     option: T;
     isActive: boolean;
     isSelected: boolean;
     isDisabled: boolean;
   }) => {
-    const { OptionComponent, setActiveOptionId, onSelectById } = usePickerContext<T, U, C>();
+    const { OptionComponent, setActiveOptionId, onSelectById } = usePickerContext<T, C>();
     const { id, option, isActive, isDisabled, isSelected } = props;
     const onPointerMove = useCallback(() => {
       setActiveOptionId(id);
@@ -615,3 +718,65 @@ const PickerOption = typedMemo(
   }
 );
 PickerOption.displayName = 'PickerOption';
+
+const getGroupColor = <T extends object>(group: Group<T>) => {
+  return group.color ?? 'base.300';
+};
+
+const getGroupName = <T extends object>(group: Group<T>) => {
+  return group.shortName ?? group.name ?? group.id;
+};
+
+const getGroupCount = <T extends object>(group: Group<T>, t: ReturnType<typeof useTranslation>['t']) => {
+  return (
+    group.getOptionCountString?.(group.options.length) ?? t('common.options_withCount', { count: group.options.length })
+  );
+};
+
+const PickerGroup = typedMemo(<T extends object>({ group, children }: PropsWithChildren<{ group: Group<T> }>) => {
+  const color = getGroupColor(group);
+  return (
+    <Flex flexDir="column" w="full" borderLeftColor={color} borderLeftWidth={4} ps={2}>
+      <PickerGroupHeader group={group} />
+      <Flex flexDir="column" gap={1} w="full" py={1}>
+        {children}
+      </Flex>
+    </Flex>
+  );
+});
+PickerGroup.displayName = 'PickerGroup';
+
+const groupSx = {
+  flexDir: 'column',
+  flex: 1,
+  ps: 2,
+  pe: 4,
+  py: 1,
+  userSelect: 'none',
+  position: 'sticky',
+  top: 0,
+  bg: 'base.800',
+  minH: 8,
+} satisfies SystemStyleObject;
+
+const PickerGroupHeader = typedMemo(<T extends object>({ group }: { group: Group<T> }) => {
+  const { t } = useTranslation();
+
+  const color = getGroupColor(group);
+  const name = getGroupName(group);
+  const count = getGroupCount(group, t);
+
+  return (
+    <Flex sx={groupSx}>
+      <Flex gap={2} alignItems="center">
+        <Text fontSize="sm" fontWeight="semibold" color={color} noOfLines={1}>
+          {name}
+        </Text>
+        <Text fontSize="sm" color="base.300" noOfLines={1}>
+          {count}
+        </Text>
+      </Flex>
+    </Flex>
+  );
+});
+PickerGroupHeader.displayName = 'PickerGroupHeader';

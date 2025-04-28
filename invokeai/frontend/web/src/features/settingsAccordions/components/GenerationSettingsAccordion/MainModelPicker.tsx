@@ -20,7 +20,7 @@ import {
 import { useAppDispatch, useAppSelector } from 'app/store/storeHooks';
 import { InformationalPopover } from 'common/components/InformationalPopover/InformationalPopover';
 import type { Group, ImperativeModelPickerHandle } from 'common/components/Picker/Picker';
-import { getRegex, Picker, usePickerContext } from 'common/components/Picker/Picker';
+import { buildGroup, getRegex, Picker, usePickerContext } from 'common/components/Picker/Picker';
 import { useDisclosure } from 'common/hooks/useBoolean';
 import { fixedForwardRef } from 'common/util/fixedForwardRef';
 import { typedMemo } from 'common/util/typedMemo';
@@ -127,21 +127,24 @@ export const MainModelPicker = memo(() => {
     () => ({ toggleBaseModelTypeFilter, basesWithModels, baseModelTypeFilters }),
     [toggleBaseModelTypeFilter, basesWithModels, baseModelTypeFilters]
   );
-  const grouped = useMemo<Group<AnyModelConfig, GroupData>[]>(() => {
+  const grouped = useMemo<Group<AnyModelConfig>[]>(() => {
     // When all groups are disabled, we show all models
     const areAllGroupsDisabled = Object.values(baseModelTypeFilters).every((v) => !v);
     const groups: {
-      [base in BaseModelType]?: Group<AnyModelConfig, GroupData>;
+      [base in BaseModelType]?: Group<AnyModelConfig>;
     } = {};
 
     for (const modelConfig of modelConfigs) {
       let group = groups[modelConfig.base];
       if (!group && (baseModelTypeFilters[modelConfig.base] || areAllGroupsDisabled)) {
-        group = {
+        group = buildGroup({
           id: modelConfig.base,
-          data: { base: modelConfig.base },
+          color: `${BASE_COLOR_MAP[modelConfig.base]}.300`,
+          shortName: MODEL_TYPE_SHORT_MAP[modelConfig.base],
+          name: modelConfig.base,
+          getOptionCountString: (count) => t('common.model_withCount', { count }),
           options: [],
-        };
+        });
         groups[modelConfig.base] = group;
       }
       if (group) {
@@ -149,7 +152,7 @@ export const MainModelPicker = memo(() => {
       }
     }
 
-    const sortedGroups: Group<AnyModelConfig, GroupData>[] = [];
+    const sortedGroups: Group<AnyModelConfig>[] = [];
 
     if (groups['flux']) {
       sortedGroups.push(groups['flux']);
@@ -174,7 +177,7 @@ export const MainModelPicker = memo(() => {
     sortedGroups.push(...Object.values(groups));
 
     return sortedGroups;
-  }, [baseModelTypeFilters, modelConfigs]);
+  }, [baseModelTypeFilters, modelConfigs, t]);
   const modelConfig = useSelectedModelConfig();
   const popover = useDisclosure(false);
   const pickerRef = useRef<ImperativeModelPickerHandle>(null);
@@ -217,7 +220,7 @@ export const MainModelPicker = memo(() => {
         <PopoverContent p={0} w={448} h={512}>
           <PopoverArrow />
           <PopoverBody p={0} w="full" h="full">
-            <Picker<AnyModelConfig, GroupData, PickerExtraContext>
+            <Picker<AnyModelConfig, PickerExtraContext>
               handleRef={pickerRef}
               options={grouped}
               getOptionId={getOptionId}
@@ -244,7 +247,7 @@ const SearchBarComponent = typedMemo(
     const { t } = useTranslation();
     const dispatch = useAppDispatch();
     const compactModelPicker = useAppSelector(selectCompactModelPicker);
-    const { extra, setSearchTerm, options } = usePickerContext<AnyModelConfig, GroupData, PickerExtraContext>();
+    const { extra, setSearchTerm, options } = usePickerContext<AnyModelConfig, PickerExtraContext>();
     const onToggleCompact = useCallback(() => {
       dispatch(compactModelPickerToggled());
     }, [dispatch]);
@@ -291,7 +294,7 @@ const SearchBarComponent = typedMemo(
 SearchBarComponent.displayName = 'SearchBarComponent';
 
 const ModelBaseFilterButton = memo(({ base }: { base: BaseModelType }) => {
-  const { extra } = usePickerContext<AnyModelConfig, GroupData, PickerExtraContext>();
+  const { extra } = usePickerContext<AnyModelConfig, PickerExtraContext>();
 
   const onClick = useCallback(() => {
     extra.toggleBaseModelTypeFilter(base);

@@ -203,7 +203,9 @@
         "label": "Label",
         "systemInformation": "System Information",
         "compact": "Compact",
-        "full": "Full"
+        "full": "Full",
+        "options_withCount_one": "{{count}} option",
+        "options_withCount_other": "{{count}} options"
     },
     "hrf": {
         "hrf": "High Resolution Fix",
